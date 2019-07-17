@@ -1,0 +1,130 @@
+Parameters:
+
+  ECSCluster:
+    Type: String
+  VpcId:
+    Type: String
+  Path:
+    Type: String
+  ALBListener:
+    Type: String
+  Priority:
+    Type: Number
+  DesiredCount:
+    Type: Number
+  ContainerMemorySize:
+    Type: Number
+  ContainerCpu:
+    Type: Number
+    Default: 256
+    Description: How much CPU to give the container. 1024 is 1 CPU
+  ContainerPort:
+    Type: Number
+
+  # ECR Repo name
+  ECRRepository:
+    Type: String
+  ECRImageTag:
+    Type: String
+  Role:
+    Type: String
+    Default: ""
+    Description: (Optional) An IAM role to give the service's containers if the code within needs to
+                 access other AWS resources like S3 buckets, DynamoDB tables, etc
+
+Conditions:
+  HasCustomRole: !Not [ !Equals [!Ref 'Role', ''] ]
+
+Resources:
+  AppLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: limitsnewloggroup
+#### your micro service
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !ImportValue ravipublicvpc:FargateContainerSecurityGroup
+          Subnets:
+            - !ImportValue ravipublicvpc:PublicSubnetOne
+            - !ImportValue ravipublicvpc:PublicSubnetTwo
+      LoadBalancers:
+        - ContainerName: !Sub ${ECRRepository}
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ECRRepository}
+      Cpu: !Ref 'ContainerCpu'
+      Memory: !Ref 'ContainerMemorySize'
+      ExecutionRoleArn: !ImportValue ravipublicvpc:ECSTaskExecutionRole
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn:
+        Fn::If:
+          - 'HasCustomRole'
+          - !Ref 'Role'
+          - !Ref "AWS::NoValue"
+      ContainerDefinitions:
+        - Name: !Sub ${ECRRepository}
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:${ECRImageTag}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Sub ${AWS::Region}
+              awslogs-group: !Ref AppLogGroup
+              # awslogs-stream-prefix: !Sub ${ECRImageTag}-${ECRRepository}
+              awslogs-stream-prefix: !Sub ${ECRImageTag}
+          Essential: true
+          Memory: !Ref ContainerMemorySize
+          Cpu: !Ref 'ContainerCpu'
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          Environment:
+            - Name: AWS_Region
+              Value: !Sub ${AWS::Region}
+
+  TargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+          VpcId: !Ref VpcId
+          Port: 80
+          Protocol: HTTP
+          TargetType: ip
+          Matcher:
+              HttpCode: 200-299
+          HealthCheckIntervalSeconds: 120
+          HealthCheckPath: "/api/limits/manage/health/"
+          HealthCheckProtocol: HTTP
+          HealthCheckTimeoutSeconds: 60
+          HealthyThresholdCount: 2
+          Name: "limitsservice"
+          Port: !Ref 'ContainerPort'
+  ListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+          ListenerArn: !Ref ALBListener
+          Priority: !Ref Priority
+          Conditions:
+              - Field: path-pattern
+                Values:
+                  - !Ref Path
+          Actions:
+              - TargetGroupArn: !Ref TargetGroup
+                Type: forward
+
+
+Outputs:
+  EcsServiceName:
+    Description: ECS Service Name
+    Value: !GetAtt Service.Name

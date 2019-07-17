@@ -1,0 +1,301 @@
+Description: CICD for ECS Cluster using CodeCommit, Codepipeline and Codebuild.
+
+Parameters:
+  StackName:
+    Type: String
+    Default: ravipublicvpc
+    Description: The name of the parent Fargate networking stack that you created. Necessary
+                 to locate and reference resources created by that stack.
+
+  CodeBuildContainerSpringBootDocker:
+    Type: String
+    Default: aws/codebuild/java:openjdk-8
+  #source code repo
+  CodeCommitRepo:
+    Type: String
+    Default: ravitut-limits-service
+  CodeCommitBranch:
+    Type: String
+    Default: master
+  EnvironmentName:
+    Type: String
+    Default: ecsenvname
+
+  # name of your microservice
+  MicroServiceName:
+    Type: String
+    Default: ravi13jullimitms
+
+  #pass down to service.yaml
+  VpcId:
+    Type: String
+    Default: vpc-09826a1f87cb76002
+  ALBListener:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:eu-west-1:182388080935:listener/app/ravip-Publi-1LM8JZ5DWQ0X7/63b9b9bb50d87215/b69d97923b2fa02c
+  ECSCluster:
+    Type: String
+    Default: ravipublicvpc-ECSCluster-65RZ3IMB99FM
+  ECRRepositoryBaseName:
+    Description: the base name for the ECR Repo for the microservices, usually the team name
+    Type: String
+    Default: raviecrauto
+
+Resources:
+
+#### ECR Repositories
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ECRRepositoryBaseName}-${MicroServiceName}"
+    # DeletionPolicy: Retain
+    DeletionPolicy: Delete
+
+
+### IAM Permissions
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "cloudformation.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ecs:*
+                  - ecr:*
+                  - iam:*
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:CreateRule
+                  - elasticloadbalancing:DeleteRule
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetGroupAttributes
+                  - elasticloadbalancing:ModifyRule
+                  - elasticloadbalancing:ModifyTargetGroup
+                  - elasticloadbalancing:ModifyTargetGroupAttributes
+                  - elasticloadbalancing:SetRulePriorities
+                  - cloudwatch:GetDashboard
+                  - cloudwatch:PutDashboard
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:DeleteDashboards
+                  - logs:Describe*
+                  - logs:Create*
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codebuild.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetAuthorizationToken
+              - Resource: !Sub arn:aws:s3:::${ArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource:
+                - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepositoryBaseName}-${MicroServiceName}"
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+              # to pull down base image like alpine-java8
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codepipeline.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                  - !Sub arn:aws:s3:::${ArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - cloudformation:*
+                  - iam:PassRole
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+
+
+### CodePipeline & Codebuild
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    # Properties:
+    #   BucketName: !Sub "${EnvironmentName}-${MicroServiceName}-codepipeline"
+      # Tags:
+    DeletionPolicy: Retain
+
+  # ref: http://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref.html
+  # CODEBUILD_RESOLVED_SOURCE_VERSION : Commit ID
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: [ CodeBuildServiceRole, ECRRepository ]
+    Properties:
+      Name: !Sub "${EnvironmentName}-${MicroServiceName}"
+      Artifacts:
+        Type: "CODEPIPELINE"
+      Source:
+        Type: "CODEPIPELINE"
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL   #BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/java:openjdk-8
+        Type: "LINUX_CONTAINER"
+        PrivilegedMode: "true"
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepositoryBaseName}-${MicroServiceName}
+      ServiceRole: !Ref CodeBuildServiceRole
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: [ CodePipelineServiceRole, CodeBuildProject ]
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      RestartExecutionOnUpdate: False
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Name:  !Sub "${EnvironmentName}-${MicroServiceName}-Pipeline"
+      # DisableInboundStageTransitions:
+      #   - Reason: "Testing - Do not build when create or update this CFN"
+      #     StageName: "Build"
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: !Ref CodeCommitRepo
+                BranchName: !Ref CodeCommitBranch
+              OutputArtifacts:
+                - Name: App
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: Deploy
+                ActionMode: CREATE_UPDATE
+                StackName: !Sub "${EnvironmentName}-${MicroServiceName}"
+                Capabilities: CAPABILITY_NAMED_IAM
+                TemplatePath: BuildOutput::service-def.yaml
+                RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+                ParameterOverrides: !Sub |
+                      {
+                        "ECRImageTag" : { "Fn::GetParam" : [ "BuildOutput", "build.json", "tag" ] },
+                        "DesiredCount" : { "Fn::GetParam" : [ "App", "ecs-service-config.json", "count" ] },
+                        "ContainerMemorySize" : { "Fn::GetParam" : [ "App", "ecs-service-config.json", "memory" ] },
+                        "ContainerPort" : { "Fn::GetParam" : [ "App", "ecs-service-config.json", "port" ] },
+                        "Path" : { "Fn::GetParam" : [ "App", "ecs-service-config.json", "path" ] },
+                        "Priority" : { "Fn::GetParam" : [ "App", "ecs-service-config.json", "priority" ] },
+                        "VpcId": "${VpcId}",
+                        "ECSCluster": "${ECSCluster}",
+                        "ALBListener": "${ALBListener}",
+                        "ECRRepository": "${ECRRepository}"
+                      }
+              InputArtifacts:
+                - Name: App
+                - Name: BuildOutput
+              RunOrder: 1
+
+
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}
