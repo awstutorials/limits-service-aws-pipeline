@@ -5,6 +5,8 @@ phases:
       java: openjdk8
   pre_build:
     commands:
+    - apt-get update
+    - apt-get -y install libaio1
     - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
     - TAG="$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | head -c 8)"
     - IMAGE_URI="${REPOSITORY_URI}:${TAG}"
@@ -12,7 +14,7 @@ phases:
     commands:
     - echo Build started on `date`
     - mvn clean install --debug
-    - docker build --tag "$IMAGE_URI" .
+    - docker build --tag "$IMAGE_URI" --build-arg JAR_FILE=./target/limits-service-0.0.1-SNAPSHOT.jar .
   post_build:
     commands:
     - printenv
