@@ -31,11 +31,48 @@ Parameters:
     Default: ""
     Description: (Optional) An IAM role to give the service's containers if the code within needs to
                  access other AWS resources like S3 buckets, DynamoDB tables, etc
+  MinimumParameterName:
+    Type: String
+    Default: "/ravi/minimum_param"
+  MaximumParameterName:
+    Type: String
+    Default: "/ravi/maximum_param"
 
 Conditions:
   HasCustomRole: !Not [ !Equals [!Ref 'Role', ''] ]
 
 Resources:
+  TaskDefinitionServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+      - !Ref SSMPasswordPolicy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ecs.amazonaws.com
+            - ecs-tasks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+  SSMPasswordPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - ssm:GetParameter
+          Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
+        - Effect: Allow
+          Action:
+          - kms:Decrypt
+          Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:key/*"
+
   AppLogGroup:
     Type: "AWS::Logs::LogGroup"
     Properties:
@@ -67,6 +104,7 @@ Resources:
       Cpu: !Ref 'ContainerCpu'
       Memory: !Ref 'ContainerMemorySize'
       ExecutionRoleArn: !ImportValue ravipublicvpc:ECSTaskExecutionRole
+      TaskRoleArn: !Ref TaskDefinitionServiceRole
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
@@ -93,6 +131,10 @@ Resources:
           Environment:
             - Name: AWS_Region
               Value: !Sub ${AWS::Region}
+            - Name: MINIMUM_PARAM_NAME
+              Value: !Ref MinimumParameterName
+            - Name: MAXIMUM_PARAM_NAME
+              Value: !Ref MaximumParameterName
 
   TargetGroup:
       Type: AWS::ElasticLoadBalancingV2::TargetGroup
