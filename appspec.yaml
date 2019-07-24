@@ -1,0 +1,10 @@
+version: 1.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: "arn:aws:ecs:eu-west-1:182388080935:task-definition/LimitTrialTaskDefinition:5"
+        LoadBalancerInfo:
+          ContainerName: "LimitsContainer"
+          ContainerPort: "80"
+        PlatformVersion: "LATEST"
